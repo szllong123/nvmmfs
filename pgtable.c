@@ -312,17 +312,15 @@ void nvmm_rm_pte_range(struct super_block *sb, pmd_t *pmd)
     unsigned long pagefn;
 
     p = pte = nvmm_get_pte(pmd);
-
-    if (pte_none(*pte))
-	return;
-
-    do {
-        pagefn = (pte_val(*pte) & 0x0fffffffffffffff) >> PAGE_SHIFT;
-        nvmm_free_block(sb, pagefn);
-        pte++;
-        cnt++;
-    }while(!pte_none(*pte) && cnt < PTRS_PER_PTE);
-
+	
+	if (!pte_none(*pte)){
+		do {
+			pagefn = (pte_val(*pte) & 0x0fffffffffffffff) >> PAGE_SHIFT;
+			nvmm_free_block(sb, pagefn);
+			pte++;
+			cnt++;
+		}while(!pte_none(*pte) && cnt < PTRS_PER_PTE);
+	}
     nvmm_pte_free(sb, p);
 }
 
