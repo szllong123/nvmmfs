@@ -110,7 +110,7 @@ struct nvmm_sb_info {
 //	struct mutex s_lock;
 	spinlock_t s_lock;
 	spinlock_t inode_spinlock;
-
+	struct inode *consistency_i;
 };
 
 
@@ -321,7 +321,9 @@ extern pud_t* nvmm_get_pud(struct super_block *sb, u64 ino);
 extern int nvmm_init_pg_table(struct super_block *sb, u64 ino);
 extern int nvmm_mapping_file(struct inode *inode);
 extern int nvmm_unmapping_file(struct inode *inode);
-
+extern void nvmm_setup_pud(pud_t *pud, pmd_t *pmd);
+extern void nvmm_setup_pmd(pmd_t *pmd, pte_t *pte);
+extern void nvmm_setup_pte(pte_t *pte, struct page *pg);
 
 /*
  * Inode and files operations
