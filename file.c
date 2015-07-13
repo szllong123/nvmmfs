@@ -291,7 +291,7 @@ static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i,
 		if(!(end_cp_addr & PMD_SIZE_1)){
 			ret = nvmm_switch_pmd_entry(pud_normal, pud_con, end_cp_addr);
 		}else{
-			ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
+			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
 		}
 	}else{
 		ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, need_block_size);
