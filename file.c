@@ -384,7 +384,8 @@ static int nvmm_consistency_function(struct super_block *sb, struct inode *norma
 
 	write_start_vaddr = (void *)(consistency_vaddr + offset);
 	ret = nvmm_iov_copy_from(write_start_vaddr, iter, length);
-	ret = nvmm_change_pud_entry(sb, normal_i, consistency_i, (unsigned long)start_cp_addr, need_block_size);
+//	ret = nvmm_change_pud_entry(sb, normal_i, consistency_i, (unsigned long)start_cp_addr, need_block_size);
+	memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, need_block_size);
 	ret = nvmm_destroy_mapping(consistency_i);
 
 	return ret;
