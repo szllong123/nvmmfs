@@ -274,14 +274,15 @@ static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i,
 
 	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
 	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	end_cp_addr = start_cp_addr + need_block_size - PMD_SIZE;
+	end_cp_addr = (start_cp_addr + need_block_size) & PMD_MASK;
 
 	if(need_block_size >= PMD_SIZE){
 		if(!(start_cp_addr & PMD_SIZE_1))
 			temp_cp_addr = start_cp_addr;
 		else{
 			temp_cp_addr = (start_cp_addr + PMD_SIZE_1) & PMD_MASK;
-			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - start_cp_addr);
+//			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - start_cp_addr);
+			memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, temp_cp_addr - start_cp_addr);
 		}
 
 		for(; temp_cp_addr < end_cp_addr; temp_cp_addr += PMD_SIZE){
@@ -291,10 +292,12 @@ static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i,
 		if(!(end_cp_addr & PMD_SIZE_1)){
 			ret = nvmm_switch_pmd_entry(pud_normal, pud_con, end_cp_addr);
 		}else{
-			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
+//			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
+			memcpy(NVMM_I(normal_i)->i_virt_addr + temp_cp_addr, NVMM_I(consistency_i)->i_virt_addr + temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
 		}
 	}else{
-		ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, need_block_size);
+//		ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, need_block_size);
+		memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, need_block_size);
 	}
 
 	return ret;
@@ -308,7 +311,7 @@ static int nvmm_change_pud_entry(struct super_block *sb, struct inode *normal_i,
 	
 	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
 	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	end_cp_addr = start_cp_addr + need_block_size - PUD_SIZE;
+	end_cp_addr = (start_cp_addr + need_block_size) & PUD_MASK;
 
 	if(need_block_size >= PUD_SIZE){
 		if(!(start_cp_addr & PUD_SIZE_1))
