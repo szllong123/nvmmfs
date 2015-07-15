@@ -346,11 +346,11 @@ static int nvmm_consistency_function(struct super_block *sb, struct inode *norma
 	struct nvmm_inode *con_nvmm_inode;
 	struct nvmm_inode_info *normal_i_info, *consistency_i_info;
 	unsigned long normal_vaddr, consistency_vaddr;
-	unsigned long start_cp_addr, end_cp_addr;
+//	unsigned long start_cp_addr, end_cp_addr;
 	unsigned long need_block_size, need_blocks, exist_blocks, alloc_blocks;
 	unsigned long blocksize;
 	int ret = 0;
-	void *copy_start_normal_vaddr, *copy_end_normal_vaddr, *copy_start_con_vaddr, *copy_end_con_vaddr;
+//	void *copy_start_normal_vaddr, *copy_end_normal_vaddr, *copy_start_con_vaddr, *copy_end_con_vaddr;
 	void *write_start_vaddr;
 
 	blocksize = sb->s_blocksize;
@@ -364,28 +364,28 @@ static int nvmm_consistency_function(struct super_block *sb, struct inode *norma
 	normal_vaddr = (unsigned long)normal_i_info->i_virt_addr;
 	consistency_vaddr = (unsigned long)consistency_i_info->i_virt_addr;
 
-	start_cp_addr = offset & PAGE_MASK;
-	end_cp_addr = (offset + length + blocksize - 1) & PAGE_MASK;
-	need_block_size = end_cp_addr - start_cp_addr;
+//	start_cp_addr = offset & PAGE_MASK;
+//	end_cp_addr = (offset + length + blocksize - 1) & PAGE_MASK;
+//	need_block_size = end_cp_addr - start_cp_addr;
 	need_blocks = (offset + length + blocksize - 1) >> sb->s_blocksize_bits;
 	exist_blocks = consistency_i->i_blocks;
 	if(need_blocks > exist_blocks){
 		alloc_blocks = need_blocks - exist_blocks;
 		nvmm_alloc_blocks(consistency_i, alloc_blocks);
 	}
-	copy_start_normal_vaddr = (void *)(normal_vaddr + start_cp_addr);
-	copy_start_con_vaddr = (void *)(consistency_vaddr + start_cp_addr);
-	copy_end_normal_vaddr = (void *)(normal_vaddr + end_cp_addr - blocksize);
-	copy_end_con_vaddr = (void *)(consistency_vaddr + end_cp_addr - blocksize);
+//	copy_start_normal_vaddr = (void *)(normal_vaddr + start_cp_addr);
+//	copy_start_con_vaddr = (void *)(consistency_vaddr + start_cp_addr);
+//	copy_end_normal_vaddr = (void *)(normal_vaddr + end_cp_addr - blocksize);
+//	copy_end_con_vaddr = (void *)(consistency_vaddr + end_cp_addr - blocksize);
 
-	memcpy(copy_start_con_vaddr, copy_start_normal_vaddr, blocksize);
-	if(need_block_size != blocksize)
-		memcpy(copy_end_con_vaddr, copy_end_normal_vaddr, blocksize);
+//	memcpy(copy_start_con_vaddr, copy_start_normal_vaddr, blocksize);
+//	if(need_block_size != blocksize)
+//		memcpy(copy_end_con_vaddr, copy_end_normal_vaddr, blocksize);
 
 	write_start_vaddr = (void *)(consistency_vaddr + offset);
 	ret = nvmm_iov_copy_from(write_start_vaddr, iter, length);
 //	ret = nvmm_change_pud_entry(sb, normal_i, consistency_i, (unsigned long)start_cp_addr, need_block_size);
-	memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, need_block_size);
+	memcpy(normal_vaddr + (unsigned long)offset, consistency_vaddr + (unsigned long)offset, length);
 	ret = nvmm_destroy_mapping(consistency_i);
 
 	return ret;
