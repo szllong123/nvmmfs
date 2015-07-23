@@ -331,15 +331,14 @@ void nvmm_rm_pmd_range(struct super_block *sb, pud_t *pud)
     int cnt = 0;
 
     p = pmd = nvmm_get_pmd(pud);
-    if (pmd_none(*pmd))
-	return;
 
-    do {
-        nvmm_rm_pte_range(sb, pmd);
-        pmd++;
-        cnt++;
-    }while(!pmd_none(*pmd) && cnt < PTRS_PER_PMD);
-
+    if (!pmd_none(*pmd)){
+		do {
+			nvmm_rm_pte_range(sb, pmd);
+			pmd++;
+			cnt++;
+		}while(!pmd_none(*pmd) && cnt < PTRS_PER_PMD);
+	}
     nvmm_pmd_free(sb, p);
 }
 
@@ -353,15 +352,13 @@ void nvmm_rm_pg_table(struct super_block *sb, u64 ino)
 
     ni = nvmm_get_inode(sb, ino);
     p = pud = nvmm_get_pud(sb, ino);
-    if (pud_none(*pud))
-	return;
-
-    do {
-        nvmm_rm_pmd_range(sb, pud);
-        pud++;
-        cnt++;
-    }while(!pud_none(*pud) && cnt < PTRS_PER_PUD);
-
+    if (!pud_none(*pud)){
+	    do {
+		    nvmm_rm_pmd_range(sb, pud);
+			pud++;
+			cnt++;
+		}while(!pud_none(*pud) && cnt < PTRS_PER_PUD);
+	}
     nvmm_pud_free(sb, p);
 
     ni->i_pg_addr = 0;

@@ -178,167 +178,161 @@ static int nvmm_release_file(struct file * file)
 }
 
 
-static inline struct page *nvmm_get_pte_entry(pte_t* const pte)
+/**
+ * find atomic updating pointer level
+ * for PTE_ENTRY level, we want to allocate 1 page,
+ * for PMD_ENTRY level, we at most allocate 512 pages, to limite page num in this scope, we have to make page_num_mask value 0x3ff
+ * for PUD_ENTRY and PGD_ENTRY level, we get the similar situation with PMD_ENTRY
+ * @offset : writing start address
+ * @length : writing length
+ *
+ * return : 1 PTE_ENTRY; 0x3ff PMD_ENTRY; 0x7ffff PUD_ENTRY; 0xfffffff  PGD_ENTRY else 0
+*/
+
+static unsigned long nvmm_find_atomic_pointer_level(loff_t offset, size_t length)
 {
-	unsigned long pagefn;
-	struct page *pg;
-	pagefn = (pte_val(*pte) & 0x0fffffffffffffff) >> PAGE_SHIFT;
-	pg = pfn_to_page(pagefn);
-	return pg;
+	size_t end_write_position = offset + length - 1;
+	int start_write_num, end_write_num;
+	unsigned long page_num_mask = 0;
+
+	//PTE_ENTRY ?
+	start_write_num = offset >> PAGE_SHIFT;
+	end_write_num = end_write_position >> PAGE_SHIFT;
+	if(start_write_num == end_write_num){
+		page_num_mask = 1;
+		return page_num_mask;
+	}
+
+	//PMD_ENTRY ?
+	start_write_num = offset >> PMD_SHIFT;
+	end_write_num = end_write_position >> PMD_SHIFT;
+	if(start_write_num == end_write_num){
+		page_num_mask = 0x1ff;
+		return page_num_mask;
+	}
+
+	//PUD_ENTRY ?
+	start_write_num = offset >> PUD_SHIFT;
+	end_write_num = end_write_position >> PUD_SHIFT;
+	if(start_write_num == end_write_num){
+		page_num_mask = 0x3ffff;
+		return page_num_mask;
+	}
+
+	//PGD_ENTRY
+	start_write_num = offset >> PGDIR_SHIFT;
+	end_write_num = end_write_position >> PGDIR_SHIFT;
+	if(start_write_num == end_write_num){
+		page_num_mask = 0x7ffffff;
+		return page_num_mask;
+	}
+
+	return page_num_mask;
 }
 
-static inline int nvmm_switch_pte_entry(pmd_t *pmd_normal, pmd_t *pmd_con, unsigned long offset)
+/**
+ * allocate pages for temp file
+ * @consistency_i : consistency file vfs inode
+ * @offset : writing start address
+ * @length : writing length
+ * @size : origin file size
+ * @page_num_mask : update level of origin file, this also reflect pages to allocate for temp file
+ * return 0 if success else 1
+*/
+
+static int nvmm_alloc_consistency_file_pages(struct inode *consistency_i , loff_t offset, size_t length, size_t size, unsigned long page_num_mask)
 {
-	int ret = 0;
+	int retval = 0;
+	int pages_to_alloc = 0;
+	size_t end_length = offset + length;
+
+	if(end_length >= size){
+		pages_to_alloc = (end_length + PAGE_SIZE_1) >> PAGE_SHIFT;
+	}else{
+		pages_to_alloc = (size + PAGE_SIZE_1) >> PAGE_SHIFT;
+	}
+	
+	pages_to_alloc &= page_num_mask;
+	if(0 == pages_to_alloc)
+		pages_to_alloc = page_num_mask + 1;
+	retval = nvmm_alloc_blocks(consistency_i, pages_to_alloc);
+	return retval;
+}
+
+/**
+ * fetch value from PTE_ENTRY and turn it into struct page
+ * @pte_t : PTE_ENTRY
+ * @offset : offset to origin file
+*/
+
+static inline struct page *nvmm_get_pte_entry(pte_t * const pte)
+{
+	return pfn_to_page(pte_pfn(*pte));
+}
+
+/**
+ * find atomic updating pointer, switch it with the temp file
+ * @sb : vfs super_block
+ * @normal_i : normal file vfs inode
+ * @consistency_i : consistency file vfs inode
+ * @offset : start write relative position of origin file
+ * @page_num_mask : update level of origin file, this also reflect pages to allocate for temp file
+*/
+
+static void nvmm_atomic_update_pointer(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, loff_t offset, unsigned long page_num_mask)
+{
+	pud_t *pud_normal, *pud_con;
+	pmd_t *pmd_normal, *pmd_con;
 	pte_t *pte_normal, *pte_con;
 	struct page *pg_normal, *pg_con;
 
-	pte_normal = pte_offset_kernel(pmd_normal, offset);
-	pte_con = pte_offset_kernel(pmd_con, offset);
-	pg_normal = nvmm_get_pte_entry(pte_normal);
-	pg_con = nvmm_get_pte_entry(pte_con);
-	nvmm_setup_pte(pte_normal, pg_con);
-	nvmm_setup_pte(pte_con, pg_normal);
-	return ret;
-}
-
-static inline pte_t* nvmm_get_pmd_entry(pmd_t * const pmd)
-{
-	return (pte_t*)__va(pmd_val(*pmd) & PAGE_MASK);
-}
-
-static inline int nvmm_switch_pmd_entry(pud_t *pud_normal, pud_t *pud_con, unsigned long offset)
-{
-	int ret = 0;
-	pmd_t *pmd_normal, *pmd_con;
-	pte_t *pte_normal, *pte_con;
-
-	pmd_normal = pmd_offset(pud_normal, offset);
-	pmd_con = pmd_offset(pud_con, offset);
-	pte_normal = nvmm_get_pmd_entry(pmd_normal);
-	pte_con = nvmm_get_pmd_entry(pmd_con);
-	nvmm_setup_pmd(pmd_normal, pte_con);
-	nvmm_setup_pmd(pmd_con, pte_normal);
-
-	return ret;
-}
-
-static inline pmd_t* nvmm_get_pud_entry(pud_t *const pud)
-{
-	return (pmd_t*)__va(pud_val(*pud) & PAGE_MASK);
-}
-
-static inline int nvmm_switch_pud_entry(pud_t *pud_normal, pud_t *pud_con, unsigned long offset)
-{
-	int ret = 0;
-	pud_t *pud_normal_temp, *pud_con_temp;
-	pmd_t *pmd_normal, *pmd_con;
-	int entry_offset = 511;
-	int entry_num = (offset >> PUD_SHIFT) & entry_offset;
-
-	pud_normal_temp = pud_normal + entry_num;
-	pud_con_temp = pud_con + entry_num;
-	pmd_normal = nvmm_get_pud_entry(pud_normal_temp);
-	pmd_con = nvmm_get_pud_entry(pud_con_temp);
-	nvmm_setup_pud(pud_normal_temp, pmd_con);
-	nvmm_setup_pud(pud_con_temp, pmd_normal);
-
-	return ret;
-}
-
-static int nvmm_change_pte_entry(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, unsigned long start_cp_addr, unsigned long need_block_size)
-{
-	int ret = 0;
-	pud_t *pud_normal, *pud_con;
-	pmd_t *pmd_normal, *pmd_con;
-	unsigned long temp_cp_addr, end_cp_addr;
-
 	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
+	pud_normal += (offset >> PUD_SHIFT);
 	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	pmd_normal = pmd_offset(pud_normal, start_cp_addr);
-	pmd_con = pmd_offset(pud_con, start_cp_addr);
-	end_cp_addr = start_cp_addr + need_block_size - PAGE_SIZE;
 
-	for(temp_cp_addr = start_cp_addr; temp_cp_addr <= end_cp_addr; temp_cp_addr += PAGE_SIZE){
-		ret = nvmm_switch_pte_entry(pmd_normal, pmd_con, temp_cp_addr);
-	}
-
-	return ret;
-}
-
-static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, unsigned long start_cp_addr, unsigned long need_block_size)
-{
-	int ret = 0;
-	pud_t *pud_normal, *pud_con;
-	unsigned long temp_cp_addr, end_cp_addr;
-
-	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
-	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	end_cp_addr = (start_cp_addr + need_block_size) & PMD_MASK;
-
-	if(need_block_size >= PMD_SIZE){
-		if(!(start_cp_addr & PMD_SIZE_1))
-			temp_cp_addr = start_cp_addr;
-		else{
-			temp_cp_addr = (start_cp_addr + PMD_SIZE_1) & PMD_MASK;
-//			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - start_cp_addr);
-			memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, temp_cp_addr - start_cp_addr);
-		}
-
-		for(; temp_cp_addr < end_cp_addr; temp_cp_addr += PMD_SIZE){
-			ret = nvmm_switch_pmd_entry(pud_normal, pud_con, temp_cp_addr);
-		}
-
-		if(!(end_cp_addr & PMD_SIZE_1)){
-			ret = nvmm_switch_pmd_entry(pud_normal, pud_con, end_cp_addr);
+	if(1 == page_num_mask){
+		pmd_normal = pmd_offset(pud_normal, offset);
+		pmd_con = pmd_offset(pud_con, 0);
+		pte_normal = pte_offset_kernel(pmd_normal, offset);
+		pte_con = pte_offset_kernel(pmd_con, 0);
+		pg_con = nvmm_get_pte_entry(pte_con);
+		if(!pte_none(*pte_normal)){
+			pg_normal = nvmm_get_pte_entry(pte_normal);
+			nvmm_setup_pte(pte_con, pg_normal);
 		}else{
-//			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
-			memcpy(NVMM_I(normal_i)->i_virt_addr + temp_cp_addr, NVMM_I(consistency_i)->i_virt_addr + temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
+			set_pte(pte_con, __pte(0));
 		}
-	}else{
-//		ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, need_block_size);
-		memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, need_block_size);
-	}
-
-	return ret;
-}
-
-static int nvmm_change_pud_entry(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, unsigned long start_cp_addr, unsigned long need_block_size)
-{
-	int ret = 0;
-	pud_t *pud_normal, *pud_con;
-	unsigned long temp_cp_addr, end_cp_addr;
-	
-	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
-	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	end_cp_addr = (start_cp_addr + need_block_size) & PUD_MASK;
-
-	if(need_block_size >= PUD_SIZE){
-		if(!(start_cp_addr & PUD_SIZE_1))
-			temp_cp_addr = start_cp_addr;
-		else{
-			temp_cp_addr = (start_cp_addr + PUD_SIZE_1) & PUD_MASK;
-//			ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - start_cp_addr);
-			memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, temp_cp_addr - start_cp_addr);
-		}
-
-		for(; temp_cp_addr < end_cp_addr; temp_cp_addr += PUD_SIZE){
-			ret = nvmm_switch_pud_entry(pud_normal, pud_con, temp_cp_addr);
-		}
-
-		if(!(end_cp_addr & PUD_SIZE_1)){
-			ret = nvmm_switch_pud_entry(pud_normal, pud_con, end_cp_addr);
+		nvmm_setup_pte(pte_normal, pg_con);
+	}else if(0x1ff == page_num_mask){
+		pmd_normal = pmd_offset(pud_normal, offset);
+		pmd_con = pmd_offset(pud_con, 0);
+		pte_con = pte_offset_kernel(pmd_con, 0);
+		if(!pmd_none(*pmd_normal)){
+			pte_normal = pte_offset_kernel(pmd_normal, offset);
+			nvmm_setup_pmd(pmd_con, pte_normal);
 		}else{
-//			ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - temp_cp_addr);
-			memcpy(NVMM_I(normal_i)->i_virt_addr + temp_cp_addr, NVMM_I(consistency_i)->i_virt_addr + temp_cp_addr, start_cp_addr + need_block_size - temp_cp_addr);
+			pmd_clear(pmd_con);
 		}
+		nvmm_setup_pmd(pmd_normal, pte_con);
+	}else if(0x3ffff == page_num_mask){
+		pmd_con = pmd_offset(pud_con, 0);
+		if(!pud_none(*pud_normal)){
+			pmd_normal = pmd_offset(pud_normal, offset);
+			nvmm_setup_pud(pud_con, pmd_normal);
+		}else{
+			pud_clear(pud_con);
+		}
+		nvmm_setup_pud(pud_normal, pmd_con);
 	}else{
-//		ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, start_cp_addr, need_block_size);
-		memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, need_block_size);
+		nvmm_error(sb, __FUNCTION__, "atomic update pointer error");
 	}
-
-	return ret;
 }
+
+
+/**
+ *
+ *
+*/
 
 static int nvmm_consistency_function(struct super_block *sb, struct inode *normal_i, loff_t offset, size_t length, struct iov_iter *iter)
 {
@@ -346,49 +340,92 @@ static int nvmm_consistency_function(struct super_block *sb, struct inode *norma
 	struct nvmm_inode *con_nvmm_inode;
 	struct nvmm_inode_info *normal_i_info, *consistency_i_info;
 	unsigned long normal_vaddr, consistency_vaddr;
-//	unsigned long start_cp_addr, end_cp_addr;
-	unsigned long need_block_size, need_blocks, exist_blocks, alloc_blocks;
-	unsigned long blocksize;
-	int ret = 0;
-//	void *copy_start_normal_vaddr, *copy_end_normal_vaddr, *copy_start_con_vaddr, *copy_end_con_vaddr;
-	void *write_start_vaddr;
-
-	blocksize = sb->s_blocksize;
-	consistency_i = NVMM_SB(sb)->consistency_i;
+	unsigned long start_cp_addr, start_cp_length, end_cp_addr, end_cp_length;
+	void *copy_start_normal_vaddr, *copy_end_normal_vaddr, *copy_start_con_vaddr, *copy_end_con_vaddr;
+	void *con_write_start_vaddr;
+	unsigned long page_num_mask = 0;
+	int retval = 0;
+	struct nvmm_sb_info *nsi = NVMM_SB(sb);
+	struct inode *root_i = nvmm_iget(sb, NVMM_ROOT_INO);
+	loff_t size = i_size_read(normal_i);
+	consistency_i = nvmm_new_inode(root_i, 0, NULL);
+	consistency_i->i_mode = cpu_to_le16(nsi->mode | S_IFREG);
 	con_nvmm_inode = nvmm_get_inode(sb, consistency_i->i_ino);
 	if(!con_nvmm_inode->i_pg_addr)
 		nvmm_init_pg_table(sb, consistency_i->i_ino);
-	ret = nvmm_establish_mapping(consistency_i);
+	retval = nvmm_establish_mapping(consistency_i);
 	consistency_i_info = NVMM_I(consistency_i);
 	normal_i_info = NVMM_I(normal_i);
 	normal_vaddr = (unsigned long)normal_i_info->i_virt_addr;
 	consistency_vaddr = (unsigned long)consistency_i_info->i_virt_addr;
 
-//	start_cp_addr = offset & PAGE_MASK;
-//	end_cp_addr = (offset + length + blocksize - 1) & PAGE_MASK;
-//	need_block_size = end_cp_addr - start_cp_addr;
-	need_blocks = (offset + length + blocksize - 1) >> sb->s_blocksize_bits;
-	exist_blocks = consistency_i->i_blocks;
-	if(need_blocks > exist_blocks){
-		alloc_blocks = need_blocks - exist_blocks;
-		nvmm_alloc_blocks(consistency_i, alloc_blocks);
+	//1. find atomic pointer level and get page_num_mask
+	page_num_mask = nvmm_find_atomic_pointer_level(offset, length);
+	if(0 == page_num_mask){
+		retval = -1;
+		nvmm_error(sb, __FUNCTION__, "find atomic pointer for consistency file failed");
+		goto out;
 	}
-//	copy_start_normal_vaddr = (void *)(normal_vaddr + start_cp_addr);
-//	copy_start_con_vaddr = (void *)(consistency_vaddr + start_cp_addr);
-//	copy_end_normal_vaddr = (void *)(normal_vaddr + end_cp_addr - blocksize);
-//	copy_end_con_vaddr = (void *)(consistency_vaddr + end_cp_addr - blocksize);
 
-//	memcpy(copy_start_con_vaddr, copy_start_normal_vaddr, blocksize);
-//	if(need_block_size != blocksize)
-//		memcpy(copy_end_con_vaddr, copy_end_normal_vaddr, blocksize);
+	//2. allocate pages for consistency file
+	retval = nvmm_alloc_consistency_file_pages(consistency_i, offset, length, size, page_num_mask);
+	if(retval){
+		nvmm_error(sb, __FUNCTION__, "allocate pages for consistency file failed");
+		goto out;
+	}
 
-	write_start_vaddr = (void *)(consistency_vaddr + offset);
-	ret = nvmm_iov_copy_from(write_start_vaddr, iter, length);
-//	ret = nvmm_change_pud_entry(sb, normal_i, consistency_i, (unsigned long)start_cp_addr, need_block_size);
-	memcpy(normal_vaddr + (unsigned long)offset, consistency_vaddr + (unsigned long)offset, length);
-	ret = nvmm_destroy_mapping(consistency_i);
+	//3. calculate copy data
+	if(1 == page_num_mask){
+		start_cp_addr = offset & PAGE_MASK;
+		con_write_start_vaddr = (void *)(consistency_vaddr + (offset & PAGE_SIZE_1));
+	}else if(0x1ff == page_num_mask){
+		start_cp_addr = offset & PMD_MASK;
+		con_write_start_vaddr = (void *)(consistency_vaddr + (offset & PMD_SIZE_1));
+	}else if(0x3ffff == page_num_mask){
+		start_cp_addr = offset & PUD_MASK;
+		con_write_start_vaddr = (void *)(consistency_vaddr + (offset & PUD_SIZE_1));
+	}else if(0x7ffffff == page_num_mask){
+		start_cp_addr = offset & PGDIR_MASK;
+		nvmm_iov_copy_from((void *)normal_vaddr + offset, iter, length);
+		goto out;
+	}else{
+		nvmm_error(sb, __FUNCTION__, "find atomic pointer for consistency file error2");
+	}
 
-	return ret;
+	//length = end_position - start_position + 1, but offset is the write position so do not need
+	start_cp_length = offset - start_cp_addr;
+	if(offset + length < size){
+		end_cp_addr = offset + length;
+		end_cp_length = size - end_cp_addr;
+	}
+
+	//4. copy data 
+	copy_start_normal_vaddr = (void *)(normal_vaddr + start_cp_addr);
+	copy_start_con_vaddr = (void *)(consistency_vaddr + start_cp_addr);
+	copy_end_normal_vaddr = (void *)(normal_vaddr + end_cp_addr);
+	copy_end_con_vaddr = (void *)(consistency_vaddr + end_cp_addr);
+	if(start_cp_length > 0){
+		memcpy(copy_start_con_vaddr, copy_start_normal_vaddr, start_cp_length);
+	}
+	if(offset + length < size){
+		memcpy(copy_end_con_vaddr, copy_end_normal_vaddr, end_cp_length);
+	}
+	nvmm_iov_copy_from(con_write_start_vaddr, iter, length);
+	//5. get atomic updating pointer and update it
+	nvmm_atomic_update_pointer(sb, normal_i, consistency_i, offset, page_num_mask);	
+
+	//6. delete temp file inode
+	nvmm_destroy_mapping(consistency_i);
+	consistency_i->__i_nlink = 0;
+	consistency_i->i_state |= I_FREEING;
+	nvmm_evict_inode(consistency_i);
+	if(0x7ffffff == page_num_mask){
+		pud_t *pud = nvmm_get_pud(sb, normal_i->i_ino);
+		nvmap(normal_vaddr, pud, current->mm);
+	}
+		
+out :
+	return retval;
 }
 
 ssize_t nvmm_direct_IO(int rw, struct kiocb *iocb,
@@ -404,8 +441,8 @@ ssize_t nvmm_direct_IO(int rw, struct kiocb *iocb,
 	loff_t size;
 	void *start_vaddr = NVMM_I(inode)->i_virt_addr + offset;
 	size_t length = iov_length(iov, nr_segs);
-	unsigned long pages_exist = 0, pages_to_alloc = 0,pages_needed = 0;        
-  // printk("size_t length is : %ld\n", length); 
+//	unsigned long pages_exist = 0, pages_to_alloc = 0,pages_needed = 0;        
+
 	if(rw == READ)
 		rcu_read_lock();
 	size = i_size_read(inode);
@@ -433,7 +470,7 @@ ssize_t nvmm_direct_IO(int rw, struct kiocb *iocb,
 			}
 		}		
 	}else if(rw == WRITE) {
-        pages_needed = ((offset + length + sb->s_blocksize - 1) >> sb->s_blocksize_bits);
+/**        pages_needed = ((offset + length + sb->s_blocksize - 1) >> sb->s_blocksize_bits);
         pages_exist = (size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
         pages_to_alloc = pages_needed - pages_exist;
 
@@ -446,7 +483,8 @@ ssize_t nvmm_direct_IO(int rw, struct kiocb *iocb,
 				goto out;
 			}
 		}
-
+*/
+		nvmm_alloc_blocks(inode, 0);
 		nvmm_consistency_function(sb, inode, offset, length, &iter);
 		retval = length;
 /*		retval = nvmm_iov_copy_from(start_vaddr, &iter, length);
