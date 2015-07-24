@@ -318,7 +318,7 @@ static int nvmm_change_pud_entry(struct super_block *sb, struct inode *normal_i,
 			temp_cp_addr = start_cp_addr;
 		else{
 			temp_cp_addr = (start_cp_addr + PUD_SIZE_1) & PUD_MASK;
-			ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - temp_cp_addr);
+			ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - start_cp_addr);
 		}
 
 		for(; temp_cp_addr < end_cp_addr; temp_cp_addr += PUD_SIZE){
