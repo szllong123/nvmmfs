@@ -178,30 +178,6 @@ static int nvmm_release_file(struct file * file)
 }
 
 
-static inline struct page *nvmm_get_pte_entry(pte_t* const pte)
-{
-	unsigned long pagefn;
-	struct page *pg;
-	pagefn = (pte_val(*pte) & 0x0fffffffffffffff) >> PAGE_SHIFT;
-	pg = pfn_to_page(pagefn);
-	return pg;
-}
-
-static inline int nvmm_switch_pte_entry(pmd_t *pmd_normal, pmd_t *pmd_con, unsigned long offset)
-{
-	int ret = 0;
-	pte_t *pte_normal, *pte_con;
-	struct page *pg_normal, *pg_con;
-
-	pte_normal = pte_offset_kernel(pmd_normal, offset);
-	pte_con = pte_offset_kernel(pmd_con, offset);
-	pg_normal = nvmm_get_pte_entry(pte_normal);
-	pg_con = nvmm_get_pte_entry(pte_con);
-	nvmm_setup_pte(pte_normal, pg_con);
-	nvmm_setup_pte(pte_con, pg_normal);
-	return ret;
-}
-
 static inline pte_t* nvmm_get_pmd_entry(pmd_t * const pmd)
 {
 	return (pte_t*)__va(pmd_val(*pmd) & PAGE_MASK);
@@ -246,26 +222,6 @@ static inline int nvmm_switch_pud_entry(pud_t *pud_normal, pud_t *pud_con, unsig
 	return ret;
 }
 
-static int nvmm_change_pte_entry(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, unsigned long start_cp_addr, unsigned long need_block_size)
-{
-	int ret = 0;
-	pud_t *pud_normal, *pud_con;
-	pmd_t *pmd_normal, *pmd_con;
-	unsigned long temp_cp_addr, end_cp_addr;
-
-	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
-	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	pmd_normal = pmd_offset(pud_normal, start_cp_addr);
-	pmd_con = pmd_offset(pud_con, start_cp_addr);
-	end_cp_addr = start_cp_addr + need_block_size - PAGE_SIZE;
-
-	for(temp_cp_addr = start_cp_addr; temp_cp_addr <= end_cp_addr; temp_cp_addr += PAGE_SIZE){
-		ret = nvmm_switch_pte_entry(pmd_normal, pmd_con, temp_cp_addr);
-	}
-
-	return ret;
-}
-
 static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, unsigned long start_cp_addr, unsigned long need_block_size)
 {
 	int ret = 0;
@@ -281,7 +237,6 @@ static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i,
 			temp_cp_addr = start_cp_addr;
 		else{
 			temp_cp_addr = (start_cp_addr + PMD_SIZE_1) & PMD_MASK;
-//			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - start_cp_addr);
 			memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, temp_cp_addr - start_cp_addr);
 		}
 
@@ -292,11 +247,9 @@ static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i,
 		if(!(end_cp_addr & PMD_SIZE_1)){
 			ret = nvmm_switch_pmd_entry(pud_normal, pud_con, end_cp_addr);
 		}else{
-//			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
 			memcpy(NVMM_I(normal_i)->i_virt_addr + temp_cp_addr, NVMM_I(consistency_i)->i_virt_addr + temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
 		}
 	}else{
-//		ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, need_block_size);
 		memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, need_block_size);
 	}
 
