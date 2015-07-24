@@ -274,7 +274,7 @@ static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i,
 
 	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
 	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	end_cp_addr = (start_cp_addr + need_block_size) & PMD_MASK;
+	end_cp_addr = (start_cp_addr + need_block_size) - PMD_SIZE;
 
 	if(need_block_size >= PMD_SIZE){
 		if(!(start_cp_addr & PMD_SIZE_1))
@@ -311,7 +311,7 @@ static int nvmm_change_pud_entry(struct super_block *sb, struct inode *normal_i,
 	
 	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
 	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	end_cp_addr = (start_cp_addr + need_block_size) & PUD_MASK;
+	end_cp_addr = (start_cp_addr + need_block_size) - PUD_SIZE;
 
 	if(need_block_size >= PUD_SIZE){
 		if(!(start_cp_addr & PUD_SIZE_1))
