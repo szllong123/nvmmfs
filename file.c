@@ -178,179 +178,15 @@ static int nvmm_release_file(struct file * file)
 }
 
 
-static inline struct page *nvmm_get_pte_entry(pte_t* const pte)
-{
-	unsigned long pagefn;
-	struct page *pg;
-	pagefn = (pte_val(*pte) & 0x0fffffffffffffff) >> PAGE_SHIFT;
-	pg = pfn_to_page(pagefn);
-	return pg;
-}
-
-static inline int nvmm_switch_pte_entry(pmd_t *pmd_normal, pmd_t *pmd_con, unsigned long offset)
-{
-	int ret = 0;
-	pte_t *pte_normal, *pte_con;
-	struct page *pg_normal, *pg_con;
-
-	pte_normal = pte_offset_kernel(pmd_normal, offset);
-	pte_con = pte_offset_kernel(pmd_con, offset);
-	pg_normal = nvmm_get_pte_entry(pte_normal);
-	pg_con = nvmm_get_pte_entry(pte_con);
-	nvmm_setup_pte(pte_normal, pg_con);
-	nvmm_setup_pte(pte_con, pg_normal);
-	return ret;
-}
-
-static inline pte_t* nvmm_get_pmd_entry(pmd_t * const pmd)
-{
-	return (pte_t*)__va(pmd_val(*pmd) & PAGE_MASK);
-}
-
-static inline int nvmm_switch_pmd_entry(pud_t *pud_normal, pud_t *pud_con, unsigned long offset)
-{
-	int ret = 0;
-	pmd_t *pmd_normal, *pmd_con;
-	pte_t *pte_normal, *pte_con;
-
-	pmd_normal = pmd_offset(pud_normal, offset);
-	pmd_con = pmd_offset(pud_con, offset);
-	pte_normal = nvmm_get_pmd_entry(pmd_normal);
-	pte_con = nvmm_get_pmd_entry(pmd_con);
-	nvmm_setup_pmd(pmd_normal, pte_con);
-	nvmm_setup_pmd(pmd_con, pte_normal);
-
-	return ret;
-}
-
-static inline pmd_t* nvmm_get_pud_entry(pud_t *const pud)
-{
-	return (pmd_t*)__va(pud_val(*pud) & PAGE_MASK);
-}
-
-static inline int nvmm_switch_pud_entry(pud_t *pud_normal, pud_t *pud_con, unsigned long offset)
-{
-	int ret = 0;
-	pud_t *pud_normal_temp, *pud_con_temp;
-	pmd_t *pmd_normal, *pmd_con;
-	int entry_offset = 511;
-	int entry_num = (offset >> PUD_SHIFT) & entry_offset;
-
-	pud_normal_temp = pud_normal + entry_num;
-	pud_con_temp = pud_con + entry_num;
-	pmd_normal = nvmm_get_pud_entry(pud_normal_temp);
-	pmd_con = nvmm_get_pud_entry(pud_con_temp);
-	nvmm_setup_pud(pud_normal_temp, pmd_con);
-	nvmm_setup_pud(pud_con_temp, pmd_normal);
-
-	return ret;
-}
-
-static int nvmm_change_pte_entry(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, unsigned long start_cp_addr, unsigned long need_block_size)
-{
-	int ret = 0;
-	pud_t *pud_normal, *pud_con;
-	pmd_t *pmd_normal, *pmd_con;
-	unsigned long temp_cp_addr, end_cp_addr;
-
-	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
-	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	pmd_normal = pmd_offset(pud_normal, start_cp_addr);
-	pmd_con = pmd_offset(pud_con, start_cp_addr);
-	end_cp_addr = start_cp_addr + need_block_size - PAGE_SIZE;
-
-	for(temp_cp_addr = start_cp_addr; temp_cp_addr <= end_cp_addr; temp_cp_addr += PAGE_SIZE){
-		ret = nvmm_switch_pte_entry(pmd_normal, pmd_con, temp_cp_addr);
-	}
-
-	return ret;
-}
-
-static int nvmm_change_pmd_entry(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, unsigned long start_cp_addr, unsigned long need_block_size)
-{
-	int ret = 0;
-	pud_t *pud_normal, *pud_con;
-	unsigned long temp_cp_addr, end_cp_addr;
-
-	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
-	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	end_cp_addr = (start_cp_addr + need_block_size) & PMD_MASK;
-
-	if(need_block_size >= PMD_SIZE){
-		if(!(start_cp_addr & PMD_SIZE_1))
-			temp_cp_addr = start_cp_addr;
-		else{
-			temp_cp_addr = (start_cp_addr + PMD_SIZE_1) & PMD_MASK;
-//			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - start_cp_addr);
-			memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, temp_cp_addr - start_cp_addr);
-		}
-
-		for(; temp_cp_addr < end_cp_addr; temp_cp_addr += PMD_SIZE){
-			ret = nvmm_switch_pmd_entry(pud_normal, pud_con, temp_cp_addr);
-		}
-
-		if(!(end_cp_addr & PMD_SIZE_1)){
-			ret = nvmm_switch_pmd_entry(pud_normal, pud_con, end_cp_addr);
-		}else{
-//			ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
-			memcpy(NVMM_I(normal_i)->i_virt_addr + temp_cp_addr, NVMM_I(consistency_i)->i_virt_addr + temp_cp_addr, start_cp_addr + need_block_size - end_cp_addr);
-		}
-	}else{
-//		ret = nvmm_change_pte_entry(sb, normal_i, consistency_i, start_cp_addr, need_block_size);
-		memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, need_block_size);
-	}
-
-	return ret;
-}
-
-static int nvmm_change_pud_entry(struct super_block *sb, struct inode *normal_i, struct inode *consistency_i, unsigned long start_cp_addr, unsigned long need_block_size)
-{
-	int ret = 0;
-	pud_t *pud_normal, *pud_con;
-	unsigned long temp_cp_addr, end_cp_addr;
-	
-	pud_normal = nvmm_get_pud(sb, normal_i->i_ino);
-	pud_con = nvmm_get_pud(sb, consistency_i->i_ino);
-	end_cp_addr = (start_cp_addr + need_block_size) & PUD_MASK;
-
-	if(need_block_size >= PUD_SIZE){
-		if(!(start_cp_addr & PUD_SIZE_1))
-			temp_cp_addr = start_cp_addr;
-		else{
-			temp_cp_addr = (start_cp_addr + PUD_SIZE_1) & PUD_MASK;
-//			ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, start_cp_addr, temp_cp_addr - start_cp_addr);
-			memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, temp_cp_addr - start_cp_addr);
-		}
-
-		for(; temp_cp_addr < end_cp_addr; temp_cp_addr += PUD_SIZE){
-			ret = nvmm_switch_pud_entry(pud_normal, pud_con, temp_cp_addr);
-		}
-
-		if(!(end_cp_addr & PUD_SIZE_1)){
-			ret = nvmm_switch_pud_entry(pud_normal, pud_con, end_cp_addr);
-		}else{
-//			ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, temp_cp_addr, start_cp_addr + need_block_size - temp_cp_addr);
-			memcpy(NVMM_I(normal_i)->i_virt_addr + temp_cp_addr, NVMM_I(consistency_i)->i_virt_addr + temp_cp_addr, start_cp_addr + need_block_size - temp_cp_addr);
-		}
-	}else{
-//		ret = nvmm_change_pmd_entry(sb, normal_i, consistency_i, start_cp_addr, need_block_size);
-		memcpy(NVMM_I(normal_i)->i_virt_addr + start_cp_addr, NVMM_I(consistency_i)->i_virt_addr + start_cp_addr, need_block_size);
-	}
-
-	return ret;
-}
-
 static int nvmm_consistency_function(struct super_block *sb, struct inode *normal_i, loff_t offset, size_t length, struct iov_iter *iter)
 {
 	struct inode *consistency_i;
 	struct nvmm_inode *con_nvmm_inode;
 	struct nvmm_inode_info *normal_i_info, *consistency_i_info;
 	unsigned long normal_vaddr, consistency_vaddr;
-//	unsigned long start_cp_addr, end_cp_addr;
 	unsigned long need_block_size, need_blocks, exist_blocks, alloc_blocks;
 	unsigned long blocksize;
 	int ret = 0;
-//	void *copy_start_normal_vaddr, *copy_end_normal_vaddr, *copy_start_con_vaddr, *copy_end_con_vaddr;
 	void *write_start_vaddr;
 
 	blocksize = sb->s_blocksize;
@@ -364,27 +200,15 @@ static int nvmm_consistency_function(struct super_block *sb, struct inode *norma
 	normal_vaddr = (unsigned long)normal_i_info->i_virt_addr;
 	consistency_vaddr = (unsigned long)consistency_i_info->i_virt_addr;
 
-//	start_cp_addr = offset & PAGE_MASK;
-//	end_cp_addr = (offset + length + blocksize - 1) & PAGE_MASK;
-//	need_block_size = end_cp_addr - start_cp_addr;
 	need_blocks = (offset + length + blocksize - 1) >> sb->s_blocksize_bits;
 	exist_blocks = consistency_i->i_blocks;
 	if(need_blocks > exist_blocks){
 		alloc_blocks = need_blocks - exist_blocks;
 		nvmm_alloc_blocks(consistency_i, alloc_blocks);
 	}
-//	copy_start_normal_vaddr = (void *)(normal_vaddr + start_cp_addr);
-//	copy_start_con_vaddr = (void *)(consistency_vaddr + start_cp_addr);
-//	copy_end_normal_vaddr = (void *)(normal_vaddr + end_cp_addr - blocksize);
-//	copy_end_con_vaddr = (void *)(consistency_vaddr + end_cp_addr - blocksize);
-
-//	memcpy(copy_start_con_vaddr, copy_start_normal_vaddr, blocksize);
-//	if(need_block_size != blocksize)
-//		memcpy(copy_end_con_vaddr, copy_end_normal_vaddr, blocksize);
 
 	write_start_vaddr = (void *)(consistency_vaddr + offset);
 	ret = nvmm_iov_copy_from(write_start_vaddr, iter, length);
-//	ret = nvmm_change_pud_entry(sb, normal_i, consistency_i, (unsigned long)start_cp_addr, need_block_size);
 	memcpy(normal_vaddr + (unsigned long)offset, consistency_vaddr + (unsigned long)offset, length);
 	ret = nvmm_destroy_mapping(consistency_i);
 
