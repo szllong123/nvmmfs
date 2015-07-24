@@ -4,3 +4,4 @@ Kconfig
 Makefile
 tags
 modules.order
+*~
