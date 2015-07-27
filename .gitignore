@@ -1,6 +1,4 @@
 *.cmd
 *.o
-Kconfig
-Makefile
 tags
 modules.order
