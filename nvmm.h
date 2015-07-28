@@ -284,9 +284,6 @@ extern void nvmm_msg(struct super_block *sb, const char * function,
                      const char * fmt,...);
 
 /* acl.c */
-extern struct posix_acl *nvmm_get_acl(struct inode *inode, int type);
-extern int nvmm_acl_chmod(struct inode *);
-extern int nvmm_init_acl(struct inode *, struct inode *);
 
 /* balloc.c */
 extern void nvmm_init_free_inode_list_offset(struct nvmm_super_block *ps,void *sbi_virt_addr);

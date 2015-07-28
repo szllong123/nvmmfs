@@ -53,15 +53,14 @@ static inline int nvmm_acl_count(size_t size)
 	}
 }
 
-//#ifdef CONFIG_NVMMFS_POSIX_ACL
+#ifdef CONFIG_NVMMFS_POSIX_ACL
 
 /* acl.c */
-/*
+
 extern struct posix_acl *nvmm_get_acl(struct inode *inode, int type);
 extern int nvmm_acl_chmod(struct inode *);
-extern int nvmm_init_acl(struct inode *, struct inode *);*/
+extern int nvmm_init_acl(struct inode *, struct inode *);
 
-/*
 #else
 #include <linux/sched.h>
 #define nvmm_get_acl	NULL
@@ -77,4 +76,3 @@ static inline int nvmm_init_acl(struct inode *inode, struct inode *dir)
 	return 0;
 }
 #endif
-*/
